@@ -250,8 +250,18 @@ void CGameRules::ProcessServerHit(HitInfo &hitInfo)
 
 	if (ok)
 	{
+#if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
+		auto& probe = g_pGame->GetBotManager().GetSpawner();
+		const bool traceProbe = probe.Owns(hitInfo.targetId) || probe.Owns(hitInfo.shooterId);
+		if (traceProbe)
+			probe.TraceHit("before-Lua", hitInfo);
+#endif
 		CreateScriptHitInfo(m_scriptHitInfo, hitInfo);
 		CallScript(m_serverStateScript, "OnHit", m_scriptHitInfo);
+#if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
+		if (traceProbe)
+			probe.TraceHit("after-Lua", hitInfo);
+#endif
 
 		// call hit listeners if any
 		if (m_hitListeners.empty() == false)

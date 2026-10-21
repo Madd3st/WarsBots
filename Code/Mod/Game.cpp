@@ -122,6 +122,7 @@ CGame::CGame()
 
 CGame::~CGame()
 {
+	m_botManager.Shutdown(); // WarsBots: before framework and game systems are released.
   m_pFramework->EndGameContext();
   m_pFramework->UnregisterListener(this);
   ReleaseScriptBinds();
@@ -359,6 +360,8 @@ bool CGame::Init(IGameFramework *pFramework)
 	if(!gEnv->pSystem->IsDedicated())
 		m_pDownloadTask = new CDownloadTask;
 
+	m_botManager.Initialize(m_pFramework); // WarsBots: no automatic actor spawning.
+
 	return true;
 }
 
@@ -514,6 +517,7 @@ string CGame::InitMapReloading()
 
 void CGame::Shutdown()
 {
+	m_botManager.Shutdown(); // Remove the probe while synched storage and GameRules still exist.
 	if (m_pPlayerProfileManager)
 	{
 		m_pPlayerProfileManager->LogoutUser(m_pPlayerProfileManager->GetCurrentUser());

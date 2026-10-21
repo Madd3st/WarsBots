@@ -1155,6 +1155,12 @@ void CPlayer::UpdateWeaponRaising()
 
 bool CPlayer::ShouldUsePhysicsMovement()
 {
+#if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
+	// Only our actively controlled, channel-less actor needs server physics movement.
+	if (gEnv->bServer && g_pGame && g_pGame->GetBotManager().GetSpawner().AIEnabled() &&
+		g_pGame->GetBotManager().GetSpawner().Owns(GetEntityId()))
+		return true;
+#endif
 
 	//swimming use physics, for everyone
 	if (m_stats.inWaterTimer>0.01f)

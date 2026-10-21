@@ -363,7 +363,17 @@ bool CActor::Init( IGameObject * pGameObject )
 
 	GetGameObject()->EnablePrePhysicsUpdate( ePPU_WhenAIActivated );
 
-	if (!GetGameObject()->BindToNetwork())
+	const bool networkBound = GetGameObject()->BindToNetwork();
+#if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
+	if (GetGameObject()->GetChannelId() == 0 && strcmp(GetEntity()->GetName(), "WarsBot_01") == 0)
+	{
+		const Vec3 position = GetEntity()->GetWorldPos();
+		CryLogAlways("[WarsBots] BindToNetwork result=%s EntityId=%u class=%s position=(%.3f, %.3f, %.3f)",
+			networkBound ? "true" : "false", GetEntityId(), GetEntity()->GetClass()->GetName(),
+			position.x, position.y, position.z);
+	}
+#endif
+	if (!networkBound)
 		return false;
 
 	GetEntity()->SetFlags(GetEntity()->GetFlags()|(ENTITY_FLAG_ON_RADAR|ENTITY_FLAG_CUSTOM_VIEWDIST_RATIO));

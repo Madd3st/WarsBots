@@ -2,9 +2,9 @@ cmake_minimum_required(VERSION 3.15)
 
 ################################################################################
 
-project(MyMod
-	VERSION 1.0.0.0
-	DESCRIPTION "Crysis Wars Mod SDK"
+project(WarsBots
+	VERSION 0.1.0.0
+	DESCRIPTION "WarsBots bootstrap mod based on Crysis Wars Mod SDK"
 	HOMEPAGE_URL "https://github.com/ccomrade/cw-mod-sdk"
 	LANGUAGES CXX RC
 )
@@ -16,6 +16,8 @@ if(NOT MSVC)
 	message(FATAL_ERROR "MSVC is the only supported compiler!")
 endif()
 
+option(WARSBOTS_EXPERIMENTAL_SPAWNER "Build the opt-in server actor replication probe" OFF)
+
 if(NOT CMAKE_MSVC_RUNTIME_LIBRARY)
 	# use statically linked MSVC runtime library
 	# we don't want to bother our users with installing additional Visual C++ Redistributable
@@ -24,8 +26,7 @@ endif()
 
 ################################################################################
 
-# prepare files in "Crysis Wars/Mods/MyMod/"
-# PROJECT_BINARY_DIR is expected to be either Bin32/ or Bin64/ inside "Crysis Wars/Mods/MyMod/"
+# Prepare mod metadata next to Bin32/ or Bin64/ in a local staging directory.
 configure_file(info.xml.in ${PROJECT_BINARY_DIR}/../info.xml)
 configure_file(logo.jpg ${PROJECT_BINARY_DIR}/../logo.jpg COPYONLY)
 
@@ -34,6 +35,7 @@ configure_file(project.h.in ${PROJECT_BINARY_DIR}/project.h)
 ################################################################################
 
 add_library(${CMAKE_PROJECT_NAME} MODULE
+	Code/Mod/Bots/BotManager.cpp
 	Code/Mod/AVMine.cpp
 	Code/Mod/Actor.cpp
 	Code/Mod/Alien.cpp
@@ -236,6 +238,17 @@ add_library(${CMAKE_PROJECT_NAME} MODULE
 
 # dependencies of .rc files are not tracked automatically
 # https://gitlab.kitware.com/cmake/cmake/-/issues/16479
+if(WARSBOTS_EXPERIMENTAL_SPAWNER)
+	target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+		Code/Mod/Bots/BotSpawner.cpp
+		Code/Mod/Bots/BotBrain.cpp
+		Code/Mod/Bots/BotMovement.cpp
+		Code/Mod/Bots/BotWeapons.cpp
+		Code/Mod/Bots/BotCombat.cpp
+	)
+	target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE WARSBOTS_EXPERIMENTAL_SPAWNER=1)
+endif()
+
 set(GAME_DLL_RC_DEPENDENCIES
 	${PROJECT_BINARY_DIR}/project.h
 )

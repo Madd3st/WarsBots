@@ -922,7 +922,14 @@ void CGameRules::RevivePlayer(CActor *pActor, const Vec3 &pos, const Ang3 &angle
 		health = g_pGameCVars->g_playerHealthValue;
 	pActor->SetMaxHealth(health);
 
-	if (!m_pGameFramework->IsChannelOnHold(pActor->GetChannelId()))
+	bool channelLessProbe = false;
+#if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
+	// The owned probe has no channel: do not pass its zero ID to the closed channel lookup.
+	ICVar* probeMode = gEnv->pConsole->GetCVar("sv_gamerules");
+	channelLessProbe = probeMode && strcmp(probeMode->GetString(), "InstantAction") == 0 &&
+		pActor->GetChannelId() == 0 && g_pGame->GetBotManager().GetSpawner().Owns(pActor->GetEntityId());
+#endif
+	if (channelLessProbe || !m_pGameFramework->IsChannelOnHold(pActor->GetChannelId()))
 		pActor->GetGameObject()->SetAspectProfile(eEA_Physics, eAP_Alive);
 
 	Matrix34 tm(pActor->GetEntity()->GetWorldTM());
@@ -1144,6 +1151,13 @@ void CGameRules::KillPlayer(CActor *pActor, bool dropItem, bool ragdoll, EntityI
 		if (IActor *pShooter=m_pGameFramework->GetIActorSystem()->GetActor(shooterId))
 			m_pGameplayRecorder->Event(pShooter->GetEntity(), GameplayEvent(eGE_Kill, 0, 0,
 				reinterpret_cast<void*>(static_cast<uintptr_t>(weaponId))));
+#if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
+	if (g_pGame->GetBotManager().GetSpawner().Owns(pActor->GetEntityId()))
+		g_pGame->GetBotManager().GetSpawner().TraceKill(shooterId,
+			shooterId && shooterId != pActor->GetEntityId() && m_pActorSystem->GetActor(shooterId));
+	if (g_pGame->GetBotManager().GetSpawner().Owns(shooterId))
+		CryLogAlways("[WarsBots] Combat kill event shooter=%u target=%u via stock GameRules::KillPlayer.", shooterId, pActor->GetEntityId());
+#endif
 }
 
 //------------------------------------------------------------------------

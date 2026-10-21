@@ -5,7 +5,7 @@
 			"name": "base-bin32",
 			"hidden": true,
 			"generator": "Ninja",
-			"binaryDir": "${sourceDir}/../Mods/MyMod/Bin32",
+			"binaryDir": "${sourceDir}/build/${presetName}/Mods/WarsBots/Bin32",
 			"architecture": {
 				"value": "x86",
 				"strategy": "external"
@@ -19,7 +19,7 @@
 			"name": "base-bin64",
 			"hidden": true,
 			"generator": "Ninja",
-			"binaryDir": "${sourceDir}/../Mods/MyMod/Bin64",
+			"binaryDir": "${sourceDir}/build/${presetName}/Mods/WarsBots/Bin64",
 			"architecture": {
 				"value": "x64",
 				"strategy": "external"

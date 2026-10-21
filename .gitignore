@@ -1,3 +1,18 @@
 /[Bb]uild*
 /.vs/
 /CMakeUserPresets.json
+
+# WarsBots: generated outputs, game installations and local research assets.
+*.dll
+*.exe
+*.lib
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.pak
+*.zip
+*.7z
+*.bin
+/Mods/
+/local/

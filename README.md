@@ -1,157 +1,86 @@
-![](logo.jpg)
+# Crysis Wars Bots / WarsBots
 
-# Crysis Wars Mod SDK
+Серверные мультиплеерные боты для Crysis Wars 1.5: сначала Instant Action,
+затем Power Struggle. Сейчас реализован экспериментальный **Combat AI MVP для локальной IA**.
+Управление выполняется через C++ игровую логику, без эмуляции мыши и клавиатуры.
 
-Create your own Mod DLL for [Crysis Wars](https://en.wikipedia.org/wiki/Crysis_Warhead#Crysis_Wars) using modern tools.
+Основа: [ccomrade/cw-mod-sdk](https://github.com/ccomrade/cw-mod-sdk),
+коммит `98c3dad11af50c298a5564a4b50c053a5ca11bf6`. История SDK сохранена.
+Исходный README сохранён в [UPSTREAM_README.md](UPSTREAM_README.md).
 
-## Getting started
+## Текущее состояние
 
-You will need a computer **that can run Crysis Wars** with Windows 10 or later.
+- `WarsBots::BotManager` принадлежит `CGame`, инициализируется в конце `CGame::Init`
+  и завершается до освобождения игровых систем в деструкторе.
+- Ожидаемый лог: `[WarsBots] BotManager initialized (bootstrap only; no bots spawned).`
+- Сохранены ручные создание, удаление и возрождение актёра без фиктивного сетевого канала.
+- Combat AI включает поиск оружия/противника, локальное движение, наведение, штатную
+  стрельбу и автоматическое возрождение; по умолчанию выключен.
+- **Обычная и экспериментальная DLL собраны: x64 Release**, экспорт `CreateGame`
+  проверен. Загрузка мода подтверждена в клиенте и dedicated server `1.1.1.6729`.
+- На IA Steelmill реально проверены автономное появление, подбор оружия, движение,
+  подключение клиента и управление AI. Атака живого игрока и автоматический respawn
+  новой боевой версии ещё требуют ручного теста: Magic8 в прогоне был наблюдателем.
+- Результаты и команды: [Combat AI MVP](Docs/COMBAT_MVP.md).
 
-Older versions of Windows are also fine as long as they run the tools mentioned below.
-Linux can also be used, but it requires a special setup (Wine + DXVK + MSVC in Wine), which is not described here.
+## Сборка и запуск
 
-### Install Crysis Wars
-
-Choose one of the following:
-- DVD (patch required)
-- [Trial](https://www.moddb.com/games/crysis-wars/downloads/crysis-wars-trial) (patch required)
-- [GOG](https://www.gog.com/game/crysiswarhead) (missing Bin32)
-- [Steam](https://store.steampowered.com/app/17330/Crysis_Warhead/)
-- EA (patch required)
-
-Some variants require the [1.5](https://comrade.one/CrysisWars_patch5.exe) official patch to be installed afterwards.
-
-> [!TIP]
-> Replace the original Crysis Wars executables with [C1-Launcher](https://github.com/ccomrade/c1-launcher).
-> It provides various quality of life improvements and simply makes the game work.
->
-> This is a recommended but optional step. If the original executables work on your computer, you can use them.
-
-### Install Git
-
-```powershell
-winget install -e --id Git.Git
-```
-
-### Install MSVC toolchain and CMake
-
-> [!NOTE]
-> If you already have Visual Studio 2019 or later with **Desktop development with C++** workload installed,
-> you can skip this step.
-
-```powershell
-winget install -e --id Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --includeRecommended --add Microsoft.VisualStudio.Workload.VCTools"
-```
-
-### Install Visual Studio Code (VS Code)
-
-```powershell
-winget install -e --id Microsoft.VisualStudioCode
-```
-
-After the installation, open VS Code, go to Extensions, and install **C/C++ Extension Pack** to get the following:
-
-![](Docs/Images/vscode_cpp_extensions.png)
-
-For more information, see the [official documentation](https://code.visualstudio.com/docs/cpp/config-msvc).
-
-### Clone the repository
-
-> [!IMPORTANT]
-> The repository (project) folder must be inside Crysis Wars folder.
->
-> For example: `C:\Crysis Wars\cw-mod-sdk`
->
-> Crysis Wars folder is expected to be writable without admin rights, so please avoid "Program Files".
-
-#### Using command line
-
-Change into Crysis folder:
-
-```powershell
-cd "C:\Crysis Wars"
-```
-
-And clone the repository:
-
-```powershell
-git clone "https://github.com/ccomrade/cw-mod-sdk.git"
-```
-
-#### Using VS Code
-
-With no folder open, click Clone Repository, use this repository URL, and select Crysis Wars folder as the destination.
-
-#### Using GitHub.com
-
-Just click **Code > Download ZIP** above and extract it into Crysis Wars folder.
-Note that Git is not needed this way, but it also means that no version control is available.
-
-### Open the project
-
-Open the folder created in the previous step in VS Code. That's it.
-
-## Building
-
-In CMake view, select the configuration you want to use:
-
-![](Docs/Images/vscode_cmake_configure.png)
-
-And run the build:
-
-![](Docs/Images/vscode_cmake_build.png)
-
-Or use the status bar button:
-
-![](Docs/Images/vscode_cmake_build_other.png)
-
-### Building via command line
-
-You can also run the build without VS Code. It requires MSVC toolchain command line:
-
-![](Docs/Images/open_dev_powershell.png)
-
-Change into the project folder:
-
-```powershell
-cd "C:\Crysis Wars\cw-mod-sdk"
-```
-
-Available configurations can be viewed using:
-
-```powershell
-cmake --list-presets
-```
-
-Prepare the selected configuration:
+После установки MSVC, Windows SDK, CMake и Ninja, из x64 Native Tools shell:
 
 ```powershell
 cmake --preset release-bin64
+cmake --build build/release-bin64/Mods/WarsBots/Bin64 --parallel
 ```
 
-Run the build:
+Экспериментальная версия (Windows PowerShell, установленные VS Build Tools):
 
 ```powershell
-cmake --build ..\Mods\MyMod\Bin64
+.\Scripts\Build-WarsBots.ps1 -ExperimentalSpawner
 ```
 
-## Debugging
+Артефакт: `build/release-bin64-probe/Mods/WarsBots/Bin64/WarsBots.dll`.
+AI разрешён только на локальном IA-сервере с `sv_bind=127.0.0.1`, `sv_lanonly=1`.
+После загрузки карты в серверной консоли: `wb_probe_local_test 1`, затем
+`wb_bot_start`. Остановка: `wb_bot_stop`; состояние: `wb_bot_status`.
 
-Go to Run and Debug view in VS Code, select what you want to debug, and launch it:
-
-![](Docs/Images/vscode_debug_selection.png)
-
-## Running
-
-You can also run your mod without VS Code:
+Скопируйте DLL и метаданные в `Crysis Wars/Mods/WarsBots` по инструкции
+[BUILD](Docs/BUILD.md), затем из папки игры:
 
 ```powershell
-..\Bin32\Crysis.exe -mod MyMod
+.\Bin64\Crysis.exe -mod WarsBots
+# Или выделенный сервер:
+.\Bin64\CrysisWarsDedicatedServer.exe -mod WarsBots
 ```
 
-Add `-dx9` or `-dx10` to run the game in DX9 or DX10 mode. By default, it runs in DX10 mode.
+## Структура
 
-To run 64-bit version, use `Bin64` instead of `Bin32`.
+```text
+Code/CryEngine/          интерфейсы CryEngine из SDK
+Code/Mod/               исходная игровая логика SDK
+Code/Mod/Bots/          BotManager, BotSpawner, BotBrain, BotMovement, BotWeapons, BotCombat
+Scripts/               воспроизводимая MSVC-сборка
+Docs/
+  ARCHITECTURE.md       компоненты и решения
+  BUILD.md              сборка, установка, ручная проверка
+  RESEARCH.md           механизмы SDK, доказательства и неизвестные
+  ROADMAP.md            последовательность разработки
+  RISKS.md              ограничения
+  VALIDATION.md         результаты проверок и список изменений
+  COMBAT_MVP.md         актуальное состояние боевого прототипа и ручной тест
+CMakeLists.txt          DLL-цель WarsBots
+CMakePresets.json       x86/x64, Debug/Release, локальный staging
+LICENSE.txt            неизменённая лицензия Crytek MOD SDK
+```
 
-To run a dedicated server, use `CrysisWarsDedicatedServer.exe` instead of `Crysis.exe`.
+Сохранено существующее имя папки `Docs` SDK (на Windows доступно также как `docs`).
+Игровые EXE, PAK, DLL и сторонние бинарные библиотеки в Git не добавляются.
+
+## Лицензирование
+
+Исходники доступны для изучения, но SDK не имеет свободной MIT/GPL-лицензии:
+сохраняется [Crytek Limited License Agreement](LICENSE.txt), включая ограничения
+использования и распространения. Не следует объявлять весь производный проект
+свободным open-source или менять лицензию SDK. Код референсных проектов не копировался.
+WarsBots — собственная модификация, не продукт Crytek или Electronic Arts.
+
+This site is not endorsed by or affiliated with Crytek or Electronic Arts. Trademarks are the property of their respective owners. Game content copyright Crytek.

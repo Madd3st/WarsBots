@@ -27,6 +27,7 @@
 #include "ClientSynchedStorage.h"
 #include "ServerSynchedStorage.h"
 #include "Cry_Camera.h"
+#include "Bots/BotManager.h"
 
 #define GAME_NAME				"Crysis Wars"
 #define GAME_LONGNAME		"Crysis Wars"
@@ -107,7 +108,13 @@ static const int GLOBAL_SERVER_NAME_KEY					=	1002;
 class CGame :
   public IGame, public IGameFrameworkListener
 {
+	// WarsBots: owned for the same lifetime as this game instance.
+	WarsBots::BotManager m_botManager;
+
 public:
+#if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
+	WarsBots::BotManager& GetBotManager() { return m_botManager; }
+#endif
   typedef bool (*BlockingConditionFunction)();
 public:
 	CGame();
