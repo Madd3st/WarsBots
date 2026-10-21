@@ -1,6 +1,8 @@
 #include "StdAfx.h"
 #include "BotMovement.h"
 #include "Actor.h"
+#include "Player.h"
+#include <IItemSystem.h>
 #include <IMovementController.h>
 
 namespace WarsBots
@@ -9,6 +11,8 @@ void BotMovement::Reset() { m_sampleTime = 0; m_avoidTime = 0; m_side = 1; }
 
 void BotMovement::Stop(CActor& actor)
 {
+	static_cast<CPlayer&>(actor).SetWarsBotMotion(actor.GetEntity()->GetWorldRotation().GetColumn1(),0,
+		actor.GetEntity()->GetWorldPos()+actor.GetEntity()->GetWorldRotation().GetColumn1()*10.0f+Vec3(0,0,1.4f));
 	if (auto* controller = actor.GetMovementController())
 	{
 		CMovementRequest request;
@@ -21,6 +25,7 @@ void BotMovement::Stop(CActor& actor)
 
 void BotMovement::Aim(CActor& actor, const Vec3& target)
 {
+	static_cast<CPlayer&>(actor).SetWarsBotMotion(target-actor.GetEntity()->GetWorldPos(),0,target);
 	if (auto* controller = actor.GetMovementController())
 	{
 		CMovementRequest request;
@@ -39,11 +44,15 @@ bool BotMovement::SafeStep(CActor& actor, const Vec3& direction) const
 	if (!gEnv->pPhysicalWorld || !actor.GetEntity()->GetPhysics())
 		return false;
 	const Vec3 feet = actor.GetEntity()->GetWorldPos();
+	IItem* held = actor.GetCurrentItem();
+	IPhysicalEntity* heldPhysics = held ? held->GetEntity()->GetPhysics() : nullptr;
 	ray_hit hit;
 	const unsigned flags = rwi_stop_at_pierceable | rwi_colltype_any;
-	for (float height : {0.4f, 1.1f})
-		if (gEnv->pPhysicalWorld->RayWorldIntersection(feet + Vec3(0,0,height), direction * 1.5f,
-			ent_all, flags, &hit, 1, actor.GetEntity()->GetPhysics()))
+	// Three parallel body-width rays prevent a shoulder clipping a corner.
+	for (float side : {-0.3f,0.0f,0.3f})
+	for (float height : {0.4f,1.1f,1.6f})
+		if (gEnv->pPhysicalWorld->RayWorldIntersection(feet + Vec3(-direction.y*side,direction.x*side,height), direction * 1.5f,
+			ent_all, flags, &hit, 1, actor.GetEntity()->GetPhysics(), heldPhysics))
 			return false;
 	// Stop at ledges; this is deliberately not a pathfinder or a jump controller.
 	return gEnv->pPhysicalWorld->RayWorldIntersection(feet + direction * 1.2f + Vec3(0,0,0.6f),
@@ -87,6 +96,7 @@ bool BotMovement::Move(CActor& actor, const Vec3& destination, const Vec3& lookA
 		}
 	}
 	if (!safe) { Stop(actor); Aim(actor, lookAt); return false; }
+	static_cast<CPlayer&>(actor).SetWarsBotMotion(direction,2.5f,lookAt);
 	CMovementRequest request;
 	request.SetMoveTarget(feet + direction * 2.0f);
 	request.SetDesiredSpeed(2.5f);

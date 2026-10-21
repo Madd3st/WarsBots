@@ -40,8 +40,11 @@ void BotBrain::ResetLife()
 {
 	m_movement.Reset();
 	m_combat.Reset();
-	m_weaponTarget = m_roamTarget = 0;
+	m_weaponTarget = 0;
+	m_patrolUntil = 0;
+	++m_life;
 	m_fallbackGiven = false;
+	m_retreating = false;
 	m_weaponSearchStarted = m_now;
 	m_nextSearch = m_now;
 	m_deadTime = 0;
@@ -112,14 +115,12 @@ void BotBrain::Update(BotSpawner& spawner, float dt)
 		CryLogAlways("[WarsBots] AI telemetry EntityId=%u state=%s pos=(%.2f, %.2f, %.2f) health=%d weapon=%u ammo=%d target=%u.",
 			actor.GetEntityId(), StateName(m_state), position.x, position.y, position.z, actor.GetHealth(),
 			actor.GetCurrentItem() ? actor.GetCurrentItem()->GetEntityId() : 0, mode ? mode->GetAmmoCount() : -1, m_combat.Target());
-		IActorIteratorPtr candidates = g_pGame->GetIGameFramework()->GetIActorSystem()->CreateActorIterator();
-		while (IActor* candidate = candidates->Next())
-			if (candidate->GetChannelId() && !strcmp(candidate->GetEntity()->GetClass()->GetName(), "Player"))
-				CryLogAlways("[WarsBots] AI candidate name=%s id=%u health=%d spectator=%d hidden=%d netChannel=%d distance=%.1f visible=%d.",
-					candidate->GetEntity()->GetName(), candidate->GetEntityId(), candidate->GetHealth(),
-					static_cast<CActor*>(candidate)->GetSpectatorMode(), candidate->GetEntity()->IsHidden() ? 1 : 0,
-					g_pGame->GetIGameFramework()->GetNetChannel(candidate->GetChannelId()) ? 1 : 0,
-					(candidate->GetEntity()->GetWorldPos() - position).GetLength(), BotCombat::CanSee(actor, *candidate) ? 1 : 0);
+		CryLogAlways("[WarsBots] AI decision target=%u visible=%d sample=%.2f age=%.2f (cached decision; muzzle checked separately).",
+			m_combat.Target(), m_combat.Visible()?1:0, m_combat.SampleTime(), m_now-m_combat.SampleTime());
+		const Vec3 heading = actor.GetEntity()->GetWorldRotation().GetColumn1();
+		pe_status_dynamics dynamics;
+		const bool physical = actor.GetEntity()->GetPhysics() && actor.GetEntity()->GetPhysics()->GetStatus(&dynamics);
+		CryLogAlways("[WarsBots] Motion heading=(%.2f,%.2f) physicalSpeed=%.2f.",heading.x,heading.y,physical?dynamics.v.GetLength2D():-1.0f);
 		m_nextTelemetry = m_now + 2.0f;
 	}
 	if (actor.GetHealth() <= 0)
@@ -153,7 +154,7 @@ void BotBrain::Update(BotSpawner& spawner, float dt)
 		if (m_now >= m_nextSearch && !m_weaponTarget)
 		{
 			Change(State::SEEKING_WEAPON);
-			m_weaponTarget = BotWeapons::FindNearby(actor, 30.0f);
+			m_weaponTarget = BotWeapons::FindNearby(actor, 30.0f, m_previousWeaponClass, m_life);
 			m_nextSearch = m_now + 2.0f;
 		}
 		IEntity* item = gEnv->pEntitySystem->GetEntity(m_weaponTarget);
@@ -163,7 +164,7 @@ void BotBrain::Update(BotSpawner& spawner, float dt)
 			if ((item->GetWorldPos() - actor.GetEntity()->GetWorldPos()).GetLengthSquared() <= 6.25f)
 			{
 				m_movement.Stop(actor);
-				if (BotWeapons::PickUp(actor, m_weaponTarget)) { m_weaponTarget = 0; Change(State::SEARCHING_ENEMY); }
+				if (BotWeapons::PickUp(actor, m_weaponTarget)) { m_previousWeaponClass = actor.GetCurrentItem()->GetEntity()->GetClass(); m_weaponTarget = 0; Change(State::SEARCHING_ENEMY); }
 				else m_weaponTarget = 0;
 			}
 			else m_movement.Move(actor, item->GetWorldPos(), item->GetWorldPos(), decisionTime);
@@ -178,33 +179,40 @@ void BotBrain::Update(BotSpawner& spawner, float dt)
 		return;
 	}
 
-	IActor* enemy = m_combat.FindEnemy(actor, m_now);
+	IActor* enemy = m_combat.FindEnemy(actor, m_now, m_verbose);
 	if (!enemy)
 	{
 		Change(State::SEARCHING_ENEMY);
-		CGameRules* rules = g_pGame->GetGameRules();
-		IEntity* roam = gEnv->pEntitySystem->GetEntity(m_roamTarget);
-		if (!roam || (roam->GetWorldPos() - actor.GetEntity()->GetWorldPos()).GetLengthSquared2D() < 4 || m_now - m_stateTime > 8)
+		const Vec3 feet = actor.GetEntity()->GetWorldPos();
+		if (m_now >= m_patrolUntil || (m_patrolGoal-feet).GetLengthSquared2D() < 2.0f)
 		{
-			int count = rules->GetSpawnLocationCount();
-			if (count) m_roamTarget = rules->GetSpawnLocation(static_cast<int>(m_now / 4.0f) % count);
-			m_stateTime = m_now;
-			roam = gEnv->pEntitySystem->GetEntity(m_roamTarget);
+			// Persistent local patrol legs, not map spawn-point cycling. SafeStep gates every move.
+			const float angle = (++m_patrolStep * 2.399963f);
+			m_patrolGoal = feet + Vec3(cosf(angle),sinf(angle),0) * (6.0f + (m_patrolStep%3)*2.0f);
+			m_patrolUntil = m_now + 7.0f;
 		}
-		if (roam) m_movement.Move(actor, roam->GetWorldPos(), roam->GetWorldPos() + Vec3(0,0,1.3f), decisionTime);
-		else m_movement.Stop(actor);
+		if (!m_movement.Move(actor, m_patrolGoal, m_patrolGoal + Vec3(0,0,1.3f), decisionTime))
+			m_patrolUntil = min(m_patrolUntil, m_now + 1.0f);
+
 		return;
 	}
-	const bool visible = BotCombat::CanSee(actor, *enemy);
-	const float distance = (enemy->GetEntity()->GetWorldPos() - actor.GetEntity()->GetWorldPos()).GetLength();
-	Vec3 aim = BotCombat::AimPoint(*enemy);
+	const bool visible = m_combat.Visible();
+	const Vec3 destination = m_combat.LastPosition();
+	const float distance = (destination - actor.GetEntity()->GetWorldPos()).GetLength();
+	Vec3 aim = m_combat.LastAim();
 	// Small deterministic error; the weapon still supplies its own normal spread.
 	const float error = min(0.25f, distance * 0.006f);
 	aim += Vec3(sinf(m_now * 2.7f), cosf(m_now * 1.9f), sinf(m_now * 1.3f) * 0.3f) * error;
-	if (visible && distance <= 18.0f)
+	if (visible && distance <= (m_state == State::ATTACKING ? 22.0f : 18.0f))
 	{
-		m_movement.Stop(actor);
-		m_movement.Aim(actor, aim);
+		// Retreat locally when crowded; obstruction checks still forbid unsafe steps.
+		if (distance < (m_retreating ? 9.0f : 6.0f))
+		{
+			m_retreating = true;
+			Vec3 away = (actor.GetEntity()->GetWorldPos()-destination).GetNormalizedSafe(FORWARD_DIRECTION);
+			m_movement.Move(actor, actor.GetEntity()->GetWorldPos()+away*3.0f, aim, decisionTime);
+		}
+		else { m_retreating = false; m_movement.Stop(actor); m_movement.Aim(actor, aim); }
 		Change(State::ATTACKING);
 		if (m_now - m_stateTime >= 0.3f) m_combat.Attack(actor, *enemy, m_now, m_verbose);
 	}
@@ -212,7 +220,7 @@ void BotBrain::Update(BotSpawner& spawner, float dt)
 	{
 		m_combat.StopFire();
 		Change(State::CHASING_ENEMY);
-		bool accepted = m_movement.Move(actor, enemy->GetEntity()->GetWorldPos(), aim, decisionTime);
+		bool accepted = m_movement.Move(actor, destination, aim, decisionTime);
 		if (m_verbose && !accepted && m_now - m_stateTime > 2.0f)
 		{ CryLogAlways("[WarsBots] Local chase blocked; no teleport/pathfinding fallback."); m_stateTime = m_now; }
 	}

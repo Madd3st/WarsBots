@@ -804,6 +804,9 @@ void CPlayer::Update(SEntityUpdateContext& ctx, int updateSlot)
 		adpm = eADPM_WhenInvisibleAndFarAway;
 	else
 		adpm = eADPM_WhenAIDeactivated;
+#if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
+	if (m_warsBotPose && GetChannelId()==0) adpm = eADPM_Never;
+#endif
 	GetGameObject()->SetAutoDisablePhysicsMode(adpm);
 	
 	if (GetHealth()<=0)
@@ -1156,9 +1159,7 @@ void CPlayer::UpdateWeaponRaising()
 bool CPlayer::ShouldUsePhysicsMovement()
 {
 #if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
-	// Only our actively controlled, channel-less actor needs server physics movement.
-	if (gEnv->bServer && g_pGame && g_pGame->GetBotManager().GetSpawner().AIEnabled() &&
-		g_pGame->GetBotManager().GetSpawner().Owns(GetEntityId()))
+	if (m_warsBotPose && GetChannelId()==0)
 		return true;
 #endif
 
@@ -1283,6 +1284,9 @@ void CPlayer::PrePhysicsUpdate()
 	if (pEnt->IsHidden() && !(GetEntity()->GetFlags() & ENTITY_FLAG_UPDATE_HIDDEN))
 		return;
 
+#if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
+	UpdateWarsBotMotion(gEnv->pTimer->GetFrameTime());
+#endif
 	Debug();
 
 	//workaround - Avoid collision with grabbed NPC - Beni
@@ -1303,7 +1307,11 @@ void CPlayer::PrePhysicsUpdate()
 
 	if (m_pMovementController)
 	{
-		if (g_pGame->GetCVars()->g_enableIdleCheck)
+		if (g_pGame->GetCVars()->g_enableIdleCheck
+#if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
+			&& !m_warsBotPose
+#endif
+		)
 		{
 			// if (gEnv->pGame->GetIGameFramework()->IsEditing() == false || pVar->GetIVal() == 2410)
 			{
@@ -1344,6 +1352,13 @@ void CPlayer::PrePhysicsUpdate()
 			params.flags |= eACF_UseHumanBlending;
 			params.flags &= ~(eACF_NoLMErrorCorrection | eACF_AlwaysPhysics);
 			params.flags |= eACF_PerAnimGraph;
+#if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
+			if (m_warsBotPose)
+			{
+				params.flags &= ~eACF_PerAnimGraph;
+				params.flags |= eACF_AlwaysPhysics;
+			}
+#endif
 		}
 	}
 	else
@@ -1472,7 +1487,11 @@ void CPlayer::PrePhysicsUpdate()
 	{
 		ProcessCharacterOffset();
 
-		if (client||(IsPlayer()&&gEnv->bServer))
+		if (client||(IsPlayer()&&gEnv->bServer)
+#if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
+			|| m_warsBotPose
+#endif
+		)
 			pCharacter->GetISkeletonPose()->SetForceSkeletonUpdate(4);
 
 		if (client)
@@ -4039,6 +4058,46 @@ float CPlayer::GetFrozenAmount(bool stages/*=false*/) const
 	return m_frozenAmount;
 }
 
+#if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
+void CPlayer::SetWarsBotMotion(const Vec3& direction, float speed, const Vec3& aim)
+{
+	if (!gEnv->bServer || !g_pGame || !g_pGame->GetBotManager().GetSpawner().Owns(GetEntityId())) return;
+	m_warsBotPose = true;
+	m_warsBotDirection = Vec3(direction.x,direction.y,0).GetNormalizedSafe(m_baseQuat.GetColumn1());
+	m_warsBotSpeed = clamp_tpl(speed,0.0f,2.5f);
+	m_warsBotAim = aim;
+	GetGameObject()->ChangedNetworkState(eEA_GameServerDynamic);
+}
+void CPlayer::UpdateWarsBotMotion(float dt)
+{
+	if (!m_warsBotPose || GetChannelId()!=0 || GetHealth()<=0 || m_stats.isRagDoll || IsFrozen()) return;
+	if (gEnv->bServer && !g_pGame->GetBotManager().GetSpawner().Owns(GetEntityId())) return;
+	Vec3 forward = m_baseQuat.GetColumn1();
+	float turn = atan2f(forward.x*m_warsBotDirection.y-forward.y*m_warsBotDirection.x,
+		forward.x*m_warsBotDirection.x+forward.y*m_warsBotDirection.y);
+	const float yaw = atan2f(-forward.x,forward.y) + clamp_tpl(turn,-3.0f*dt,3.0f*dt);
+	m_baseQuat = Quat::CreateRotationZ(yaw);
+	m_viewQuat = m_viewQuatFinal = m_baseQuat;
+	// ProcessTurning submits rotation to AnimatedCharacter; physics remains authoritative.
+	// A channel-less replica has no CNetPlayerInput, so feed the normal movement/graph path.
+	if (!gEnv->bServer)
+	{
+		CMovementRequest request;
+		if (m_warsBotSpeed>0.01f) request.SetMoveTarget(GetEntity()->GetWorldPos()+m_warsBotDirection*2.0f);
+		else request.ClearMoveTarget();
+		request.SetDesiredSpeed(m_warsBotSpeed);
+		request.SetPseudoSpeed(m_warsBotSpeed>0.01f ? 0.5f : 0.0f);
+		request.SetStance(STANCE_STAND);
+		request.SetLookTarget(m_warsBotAim);
+		request.SetAimTarget(m_warsBotAim);
+		request.SetFireTarget(m_warsBotAim);
+		request.SetBodyTarget(GetEntity()->GetWorldPos()+m_warsBotDirection*4.0f);
+		request.SetAllowStrafing(false);
+		m_pMovementController->RequestMovement(request);
+	}
+}
+#endif
+
 void CPlayer::SetAngles(const Ang3 &angles) 
 {
 	Matrix33 rot(Matrix33::CreateRotationXYZ(angles));
@@ -4173,6 +4232,28 @@ bool CPlayer::NetSerialize( TSerialize ser, EEntityAspects aspect, uint8 profile
 	if(m_pNanoSuit)													// nanosuit needs to be serialized before input
 		m_pNanoSuit->Serialize(ser, aspect);	// because jumping/punching/sprinting energy consumption will vary with suit settings
 
+#if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
+	if (aspect == eEA_GameServerDynamic)
+	{
+		bool bot = gEnv->bServer ? g_pGame->GetBotManager().GetSpawner().Owns(GetEntityId()) && m_warsBotPose : m_warsBotPose;
+		// CryNetwork caches aspect layouts: conditional payload must be an optional group.
+        bot = ser.BeginOptionalGroup("WarsBotMotion",bot);
+        if (bot)
+		{
+			ser.Value("warsBotDirection",m_warsBotDirection,'dir0');
+			ser.Value("warsBotSpeed",m_warsBotSpeed);
+			ser.Value("warsBotAim",m_warsBotAim,'wrld');
+            ser.EndGroup();
+		}
+		if (ser.IsReading() && !gEnv->bServer && GetChannelId()==0)
+		{
+			if (bot && !m_warsBotPose)
+				CryLogAlways("[WarsBots] Motion replica activated EntityId=%u (server dynamic aspect, no channel).",GetEntityId());
+			m_warsBotPose = bot;
+			if (bot) GetGameObject()->EnablePrePhysicsUpdate(ePPU_Always);
+		}
+	}
+#endif
 	if (aspect == IPlayerInput::INPUT_ASPECT)
 	{
 		SSerializedPlayerInput serializedInput;

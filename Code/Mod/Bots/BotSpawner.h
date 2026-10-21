@@ -69,6 +69,7 @@ private:
 	Ang3 m_spawnAngles = Ang3(ZERO);
 	int m_lastHealth = 0;
 	EntityId m_lastHitShooter = 0;
+	EntityId m_lastSpawnLocation = 0;
 	bool m_killPlayerObserved = false;
 	BotBrain m_brain;
 };

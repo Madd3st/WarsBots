@@ -585,6 +585,14 @@ public:
 	ILINE virtual Matrix34 GetViewMatrix() const { return m_clientViewMatrix; }
 	virtual void AddAngularImpulse(const Ang3 &angular,float deceleration, float duration);
 	virtual void SetAngles(const Ang3 &angles);
+#if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
+	// Server-owned pose, replicated without a client channel. No authority transfer.
+	void SetWarsBotMotion(const Vec3& direction, float speed, const Vec3& aim);
+	void UpdateWarsBotMotion(float dt);
+	bool m_warsBotPose = false;
+	Vec3 m_warsBotDirection = Vec3(0,1,0), m_warsBotAim = Vec3(ZERO);
+	float m_warsBotSpeed = 0;
+#endif
 	virtual Ang3 GetAngles();
 	virtual void PlayAction(const char *action,const char *extension, bool looping=false);
 	virtual void UpdateGrab(float frameTime);

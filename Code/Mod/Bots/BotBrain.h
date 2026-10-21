@@ -21,11 +21,15 @@ private:
 	bool m_running = false;
 	bool m_verbose = false;
 	bool m_fallbackGiven = false;
+	bool m_retreating = false;
 	State m_state = State::SPAWNING;
 	float m_now = 0, m_tick = 0, m_stateTime = 0, m_weaponSearchStarted = 0, m_nextSearch = 0, m_deadTime = 0;
 	float m_nextTelemetry = 0;
 	EntityId m_weaponTarget = 0;
-	EntityId m_roamTarget = 0;
+	Vec3 m_patrolGoal = Vec3(ZERO);
+	float m_patrolUntil = 0;
+	unsigned m_life = 0, m_patrolStep = 0;
+	IEntityClass* m_previousWeaponClass = nullptr;
 	BotMovement m_movement;
 	BotCombat m_combat;
 };

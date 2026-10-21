@@ -51,21 +51,24 @@ bool BotWeapons::SelectAvailable(CActor& actor)
 	return false;
 }
 
-EntityId BotWeapons::FindNearby(CActor& actor, float radius)
+EntityId BotWeapons::FindNearby(CActor& actor, float radius, IEntityClass* previousClass, unsigned life)
 {
 	EntityId result = 0;
-	float best = radius * radius;
+	float best = 1e10f;
 	IEntityItPtr iterator = gEnv->pEntitySystem->GetEntityIterator();
 	while (IEntity* entity = iterator->Next())
 	{
 		if (entity->IsHidden()) continue;
 		float distance = (entity->GetWorldPos() - actor.GetEntity()->GetWorldPos()).GetLengthSquared();
-		if (distance >= best) continue;
+		if (distance > radius*radius) continue;
 		IItem* item = Items()->GetItem(entity->GetId());
 		if (Suitable(item) && !item->GetOwnerId() && static_cast<CItem*>(item)->CanPickUp(actor.GetEntityId()))
 		{
-			best = distance;
-			result = entity->GetId();
+			// Prefer a different class, but keep travel cost significant. Stable within a life.
+			unsigned hash = entity->GetId()*1664525u + life*1013904223u;
+			hash ^= hash >> 16;
+			float score = sqrtf(distance) + (entity->GetClass()==previousClass ? 6.0f : 0.0f) + (hash%1000)*0.005f;
+			if (score < best) { best = score; result = entity->GetId(); }
 		}
 	}
 	return result;

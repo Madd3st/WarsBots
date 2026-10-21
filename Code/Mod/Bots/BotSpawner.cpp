@@ -106,6 +106,12 @@ bool BotSpawner::Spawn(const Vec3& position)
 	m_entityId = actor->GetEntityId();
 	m_identity = actor->GetEntity();
 	const Vec3 actualPosition = actor->GetEntity()->GetWorldPos();
+	m_lastSpawnLocation = 0;
+	if (CGameRules* rules = g_pGame->GetGameRules())
+		for (int i=0; i<rules->GetSpawnLocationCount(); ++i)
+			if (IEntity* spawn = gEnv->pEntitySystem->GetEntity(rules->GetSpawnLocation(i)))
+				if ((spawn->GetWorldPos()-actualPosition).GetLengthSquared()<2.25f)
+				{ m_lastSpawnLocation = spawn->GetId(); break; }
 	m_spawnPosition = actualPosition;
 	m_spawnAngles = Ang3(actor->GetEntity()->GetWorldRotation());
 	m_lastHealth = actor->GetHealth();
@@ -261,9 +267,34 @@ bool BotSpawner::Revive()
 		return false;
 	}
 	const EntityId id = m_entityId;
-	CryLogAlways("[WarsBots] Revive requested EntityId=%u position=(%.3f, %.3f, %.3f).",
-		id, m_spawnPosition.x, m_spawnPosition.y, m_spawnPosition.z);
-	rules->RevivePlayer(actor, m_spawnPosition, m_spawnAngles, 0, true);
+	EntityId chosen = 0;
+	const int count = rules->GetSpawnLocationCount();
+	const int start = count ? (m_entityId + static_cast<unsigned>(gEnv->pTimer->GetFrameStartTime().GetMilliSeconds())) % count : 0;
+	// Native checks include a swept body volume and proximity to other Player entities.
+	// Last spawn is a fallback only when no alternative passes both checks.
+	for (int pass=0; pass<2 && !chosen; ++pass)
+		for (int i=0; i<count; ++i)
+		{
+			EntityId candidate = rules->GetSpawnLocation((start+i)%count);
+			if ((!pass && candidate==m_lastSpawnLocation) ||
+				!rules->IsSpawnLocationSafe(id,candidate,6.0f,0.0f) ||
+				!rules->TestSpawnLocationWithEnvironment(candidate,id,0.2f,1.8f)) continue;
+			chosen = candidate;
+			break;
+		}
+	if (!chosen)
+	{
+		CryLogAlways("[WarsBots] Revive deferred: no safe IA spawn; retry in 5 seconds.");
+		return false; // Safer fallback than reviving inside geometry or a player.
+	}
+	IEntity* spawn = gEnv->pEntitySystem->GetEntity(chosen);
+	if (!spawn) return false;
+	const Vec3 position = spawn->GetWorldPos()+Vec3(0,0,0.2f);
+	const Ang3 angles(spawn->GetWorldRotation());
+	CryLogAlways("[WarsBots] Revive requested EntityId=%u spawnId=%u previousSpawn=%u position=(%.3f,%.3f,%.3f).",
+		id,chosen,m_lastSpawnLocation,position.x,position.y,position.z);
+	rules->RevivePlayer(actor,position,angles,0,true);
+
 	IActor* revived = m_framework->GetIActorSystem()->GetActor(id);
 	const bool alive = Owns(id) && revived && revived->GetHealth() > 0 &&
 		revived->GetGameObject()->GetAspectProfile(eEA_Physics) == eAP_Alive;
@@ -271,6 +302,7 @@ bool BotSpawner::Revive()
 		id, Owns(id) ? 1 : 0, alive ? 1 : 0, revived ? revived->GetHealth() : -1);
 	if (alive)
 	{
+		m_lastSpawnLocation = chosen;
 		m_lastHealth = revived->GetHealth();
 		m_lastHitShooter = 0;
 		m_killPlayerObserved = false;
