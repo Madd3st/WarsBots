@@ -44,6 +44,11 @@ void BotSpawner::Initialize(IGameFramework* framework)
 	gEnv->pConsole->AddCommand("wb_probe_remove", RemoveCommand, 0, "Remove only the owned WarsBots probe");
 	gEnv->pConsole->AddCommand("wb_probe_status", StatusCommand, 0, "Report the owned probe; not proof of client visibility");
 	gEnv->pConsole->AddCommand("wb_probe_revive", ReviveCommand, 0, "Local IA only: revive the owned dead probe at its original spawn position");
+	gEnv->pConsole->Register("wb_bot_cloak_experimental", &m_cloakExperimental, 0, 0, "Local IA ability gate: experimental cloak, defaults OFF");
+	gEnv->pConsole->AddCommand("wb_bot_jump", BotJumpCommand, 0, "Local IA: wb_bot_jump [normal|strength], one request");
+	gEnv->pConsole->AddCommand("wb_bot_gait", BotGaitCommand, 0, "Local IA: wb_bot_gait walk|run|sprint|auto (6-second forward test)");
+	gEnv->pConsole->AddCommand("wb_bot_suit", BotSuitCommand, 0, "Local IA: wb_bot_suit defense|speed|strength|cloak|auto");
+	gEnv->pConsole->AddCommand("wb_bot_abilities", BotAbilitiesCommand, 0, "Local IA: status of abilities and physical state");
 	gEnv->pConsole->AddCommand("wb_bot_start", BotStartCommand, 0, "Local IA: wb_bot_start [x y z]; explicit opt-in autonomous combat");
 	gEnv->pConsole->AddCommand("wb_bot_stop", BotStopCommand, 0, "Stop movement/fire/automatic respawn; leave the actor for probe commands");
 	gEnv->pConsole->AddCommand("wb_bot_status", BotStatusCommand, 0, "Report autonomous bot state");
@@ -63,6 +68,11 @@ void BotSpawner::Shutdown()
 	gEnv->pConsole->RemoveCommand("wb_bot_stop");
 	gEnv->pConsole->RemoveCommand("wb_bot_status");
 	gEnv->pConsole->RemoveCommand("wb_bot_verbose");
+	gEnv->pConsole->RemoveCommand("wb_bot_jump");
+	gEnv->pConsole->RemoveCommand("wb_bot_gait");
+	gEnv->pConsole->RemoveCommand("wb_bot_suit");
+	gEnv->pConsole->RemoveCommand("wb_bot_abilities");
+	gEnv->pConsole->UnregisterVariable("wb_bot_cloak_experimental", true);
 	gEnv->pConsole->UnregisterVariable("wb_probe_local_test", true);
 	EndLevel();
 	gEnv->pEntitySystem->RemoveSink(this);
@@ -96,8 +106,10 @@ bool BotSpawner::Spawn(const Vec3& position)
 
 	// Direct creation avoids SpawnPlayer's lookup by the shared channel ID zero.
 	// CActor::Init performs BindToNetwork; do not bind twice or fabricate a channel.
+	m_creatingActor = true;
 	IActor* actor = m_framework->GetIActorSystem()->CreateActor(
 		0, "WarsBot_01", "Player", position, Quat(IDENTITY), Vec3(1, 1, 1));
+	m_creatingActor = false;
 	if (!actor)
 	{
 		CryLogAlways("[WarsBots] CreateActor failed; no match registration attempted.");
@@ -412,4 +424,17 @@ void BotSpawner::BotVerboseCommand(IConsoleCmdArgs* args)
 		g_pGame->GetBotManager().GetSpawner().m_brain.SetVerbose(!strcmp(args->GetArg(1), "1"));
 	else CryLogAlways("[WarsBots] Usage: wb_bot_verbose 0|1.");
 }
+void BotSpawner::BotAbilityCommand(IConsoleCmdArgs* args)
+{
+	if (!args || !g_pGame) return;
+	auto& spawner=g_pGame->GetBotManager().GetSpawner();
+	if (!spawner.CanRunLocalIA() || !spawner.GetActor() || !spawner.AIEnabled())
+	{ CryLogAlways("[WarsBots] ACTION REFUSED: abilities require running owned bot and local IA gate."); return; }
+	spawner.m_brain.AbilityCommand(args);
+}
+void BotSpawner::BotJumpCommand(IConsoleCmdArgs* args) { BotAbilityCommand(args); }
+void BotSpawner::BotGaitCommand(IConsoleCmdArgs* args) { BotAbilityCommand(args); }
+void BotSpawner::BotSuitCommand(IConsoleCmdArgs* args) { BotAbilityCommand(args); }
+void BotSpawner::BotAbilitiesCommand(IConsoleCmdArgs* args) { BotAbilityCommand(args); }
+
 }

@@ -254,6 +254,10 @@ CPlayer::~CPlayer()
 
 bool CPlayer::Init(IGameObject * pGameObject)
 {
+#if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
+	if (gEnv->bServer) m_warsBotActor = g_pGame->GetBotManager().GetSpawner().IsCreatingActor() &&
+		!strcmp(pGameObject->GetEntity()->GetName(),"WarsBot_01");
+#endif
 	if (!CActor::Init(pGameObject))
 		return false;
 
@@ -3369,10 +3373,31 @@ void CPlayer::Revive( bool fromInit )
 	//Restore near fov to default value (60.0f) and FP weapon position, just in case
 	if (IsClient())
 		ResetFPView();
+#if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
+	if (IsWarsBotActor())
+	{
+		if (!m_pNanoSuit || !m_pNanoSuit->IsActive()) ActivateNanosuit(true);
+		m_pNanoSuit->SetMode(NANOMODE_DEFENSE);
+		m_warsBotSprint=m_warsBotAirborne=false;
+		m_warsBotSpeed=0;
+		m_warsBotStance=STANCE_STAND;
+		m_warsBotSeenJump=m_warsBotJumpSerial;
+	}
+#endif
+
 }
 
 void CPlayer::Kill()
 {
+#if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
+	if (IsWarsBotActor())
+	{
+		m_pMovementController->Reset();
+		m_actions &= ~(ACTION_SPRINT|ACTION_MOVE);
+		m_warsBotSprint=m_warsBotAirborne=false; m_warsBotSpeed=0;
+		GetGameObject()->ChangedNetworkState(eEA_GameServerDynamic);
+	}
+#endif
 	if (CNanoSuit *pSuit=GetNanoSuit())
 		pSuit->Death();
 
@@ -4059,6 +4084,50 @@ float CPlayer::GetFrozenAmount(bool stages/*=false*/) const
 }
 
 #if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
+// Spawn metadata is read before any suit aspects, including for late joiners.
+ISerializableInfoPtr CPlayer::GetSpawnInfo()
+{
+	struct SBotInfo : ISerializableInfo
+	{
+		ISerializableInfoPtr base;
+		bool bot;
+		void SerializeWith(TSerialize ser) override
+		{ base->SerializeWith(ser); ser.Value("warsBotActor",bot,'bool'); }
+	};
+	SBotInfo* info=new SBotInfo;
+	info->base=CActor::GetSpawnInfo(); info->bot=m_warsBotActor;
+	return info;
+}
+void CPlayer::SerializeSpawnInfo(TSerialize ser)
+{
+	CActor::SerializeSpawnInfo(ser);
+	ser.Value("warsBotActor",m_warsBotActor,'bool');
+	// CryAction reads spawn metadata BEFORE Init: store only; Revive initializes the suit after CActor::Init.
+}
+void CPlayer::EnsureWarsBotSuit()
+{
+	if (!IsWarsBotActor() || m_pNanoSuit) return; // Never reset energy or override EMP on an update.
+	ActivateNanosuit(true);
+	CryLogAlways("[WarsBots] NETWORK SUIT REPLICA/INIT EntityId=%u server=%d active=%d energy=%.1f.",
+		GetEntityId(),gEnv->bServer?1:0,m_pNanoSuit->IsActive()?1:0,m_pNanoSuit->GetSuitEnergy());
+}
+void CPlayer::SetWarsBotActions(bool sprint, bool moving, EStance stance)
+{
+	if (!gEnv->bServer || !g_pGame->GetBotManager().GetSpawner().Owns(GetEntityId())) return;
+	if (!g_pGame->GetBotManager().GetSpawner().AIEnabled()) m_pMovementController->Reset();
+	sprint=sprint && moving && GetHealth()>0 && !IsFiring() && m_pNanoSuit && m_pNanoSuit->IsActive();
+	if (sprint!=m_warsBotSprint) CryLogAlways("[WarsBots] BOT ACTION: SPRINT %s.",sprint?"START":"STOP");
+	m_warsBotSprint=sprint; m_warsBotStance=stance;
+	if (sprint) m_actions|=ACTION_SPRINT; else m_actions&=~ACTION_SPRINT;
+	if (moving) m_actions|=ACTION_MOVE; else m_actions&=~ACTION_MOVE;
+	GetGameObject()->ChangedNetworkState(eEA_GameServerDynamic);
+}
+void CPlayer::PublishWarsBotJump(bool strength)
+{
+	if (!gEnv->bServer || !g_pGame->GetBotManager().GetSpawner().Owns(GetEntityId())) return;
+	++m_warsBotJumpSerial; m_warsBotStrengthJump=strength; m_warsBotAirborne=true;
+	GetGameObject()->ChangedNetworkState(eEA_GameServerDynamic);
+}
 void CPlayer::SetWarsBotMotion(const Vec3& direction, float speed, const Vec3& aim)
 {
 	if (!gEnv->bServer || !g_pGame || !g_pGame->GetBotManager().GetSpawner().Owns(GetEntityId())) return;
@@ -4080,14 +4149,33 @@ void CPlayer::UpdateWarsBotMotion(float dt)
 	m_viewQuat = m_viewQuatFinal = m_baseQuat;
 	// ProcessTurning submits rotation to AnimatedCharacter; physics remains authoritative.
 	// A channel-less replica has no CNetPlayerInput, so feed the normal movement/graph path.
-	if (!gEnv->bServer)
+	if (gEnv->bServer)
 	{
+		const bool airborne=m_stats.inAir>0.01f || (m_stats.jumped && m_stats.onGround<=0.01f);
+		if (airborne!=m_warsBotAirborne) { m_warsBotAirborne=airborne; GetGameObject()->ChangedNetworkState(eEA_GameServerDynamic); }
+		if (GetHealth()<=0 || IsFiring() || m_warsBotSpeed<=0.01f)
+		{ m_actions&=~ACTION_SPRINT; if (m_warsBotSprint) SetWarsBotActions(false,m_warsBotSpeed>0,static_cast<EStance>(m_warsBotStance)); }
+	}
+	else
+	{
+		if (m_warsBotSprint) m_actions|=ACTION_SPRINT; else m_actions&=~ACTION_SPRINT;
+		if (m_warsBotSpeed>0.01f) m_actions|=ACTION_MOVE; else m_actions&=~ACTION_MOVE;
+		// Replicas animate the authoritative jump; they never issue SetJump or a jump impulse.
+		if (m_warsBotSeenJump!=m_warsBotJumpSerial)
+		{
+			m_warsBotSeenJump=m_warsBotJumpSerial;
+			if (m_warsBotAirborne)
+				GetAnimationGraphState()->SetInput("Action",m_warsBotStrengthJump?"jumpMPStrength":"jumpMP");
+			CryLogAlways("[WarsBots] NETWORK MOTION JUMP REPLICA EntityId=%u serial=%u strength=%d.",GetEntityId(),unsigned(m_warsBotJumpSerial),m_warsBotStrengthJump?1:0);
+		}
+		if (!m_warsBotAirborne && m_stats.jumped) GetAnimationGraphState()->SetInput("Action","idle");
+		m_stats.jumped=m_warsBotAirborne;
 		CMovementRequest request;
 		if (m_warsBotSpeed>0.01f) request.SetMoveTarget(GetEntity()->GetWorldPos()+m_warsBotDirection*2.0f);
 		else request.ClearMoveTarget();
 		request.SetDesiredSpeed(m_warsBotSpeed);
-		request.SetPseudoSpeed(m_warsBotSpeed>0.01f ? 0.5f : 0.0f);
-		request.SetStance(STANCE_STAND);
+		request.SetPseudoSpeed(m_warsBotSpeed>0.01f ? (m_warsBotSprint?1.0f:(m_warsBotSpeed<2.0f?0.3f:0.5f)) : 0.0f);
+		request.SetStance(static_cast<EStance>(m_warsBotStance));
 		request.SetLookTarget(m_warsBotAim);
 		request.SetAimTarget(m_warsBotAim);
 		request.SetFireTarget(m_warsBotAim);
@@ -4229,6 +4317,17 @@ bool CPlayer::NetSerialize( TSerialize ser, EEntityAspects aspect, uint8 profile
 			ser.FlagPartialRead();
 	}
 
+#if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
+	if (IsWarsBotActor()) EnsureWarsBotSuit();
+	if (aspect==eEA_GameServerDynamic && ser.BeginOptionalGroup("WarsBotSuitActive",IsWarsBotActor()))
+	{
+		bool active=m_pNanoSuit && m_pNanoSuit->IsActive();
+		ser.Value("active",active,'bool');
+		if (ser.IsReading() && IsWarsBotActor() && m_pNanoSuit && active!=m_pNanoSuit->IsActive())
+			m_pNanoSuit->Activate(active);
+		ser.EndGroup();
+	}
+#endif
 	if(m_pNanoSuit)													// nanosuit needs to be serialized before input
 		m_pNanoSuit->Serialize(ser, aspect);	// because jumping/punching/sprinting energy consumption will vary with suit settings
 
@@ -4243,6 +4342,11 @@ bool CPlayer::NetSerialize( TSerialize ser, EEntityAspects aspect, uint8 profile
 			ser.Value("warsBotDirection",m_warsBotDirection,'dir0');
 			ser.Value("warsBotSpeed",m_warsBotSpeed);
 			ser.Value("warsBotAim",m_warsBotAim,'wrld');
+			ser.Value("sprint",m_warsBotSprint,'bool');
+			ser.Value("stance",m_warsBotStance,'stnc');
+			ser.Value("airborne",m_warsBotAirborne,'bool');
+			ser.Value("jumpSerial",m_warsBotJumpSerial,'ui8');
+			ser.Value("strengthJump",m_warsBotStrengthJump,'bool');
             ser.EndGroup();
 		}
 		if (ser.IsReading() && !gEnv->bServer && GetChannelId()==0)
@@ -4269,6 +4373,16 @@ bool CPlayer::NetSerialize( TSerialize ser, EEntityAspects aspect, uint8 profile
 
 		ser.Value("VehicleViewRotation", m_vehicleViewDir, 'dir0');
 	}
+#if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
+	if (ser.IsReading() && !gEnv->bServer && IsWarsBotActor() && m_pNanoSuit &&
+		gEnv->pTimer->GetCurrTime()>=m_warsBotNextNetworkLog)
+	{
+		CryLogAlways("[WarsBots] NETWORK MOTION / SUIT REPLICA EntityId=%u speed=%.2f sprint=%d airborne=%d mode=%d energy=%.1f active=%d.",
+			GetEntityId(),m_warsBotSpeed,m_warsBotSprint?1:0,m_warsBotAirborne?1:0,
+			int(m_pNanoSuit->GetMode()),m_pNanoSuit->GetSuitEnergy(),m_pNanoSuit->IsActive()?1:0);
+		m_warsBotNextNetworkLog=gEnv->pTimer->GetCurrTime()+2.0f;
+	}
+#endif
 	return true;
 }
 

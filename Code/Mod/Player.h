@@ -588,7 +588,18 @@ public:
 #if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
 	// Server-owned pose, replicated without a client channel. No authority transfer.
 	void SetWarsBotMotion(const Vec3& direction, float speed, const Vec3& aim);
+	bool IsWarsBotActor() const { return m_warsBotActor && GetChannelId()==0; }
+	void EnsureWarsBotSuit();
+	void SetWarsBotActions(bool sprint, bool moving, EStance stance);
+	void PublishWarsBotJump(bool strength);
+	virtual void SerializeSpawnInfo(TSerialize ser) override;
+	virtual ISerializableInfoPtr GetSpawnInfo() override;
 	void UpdateWarsBotMotion(float dt);
+	bool m_warsBotActor = false;
+	bool m_warsBotSprint = false, m_warsBotAirborne = false, m_warsBotStrengthJump = false;
+	uint8 m_warsBotJumpSerial = 0, m_warsBotSeenJump = 0;
+	uint8 m_warsBotStance = STANCE_STAND;
+	float m_warsBotNextNetworkLog = 0;
 	bool m_warsBotPose = false;
 	Vec3 m_warsBotDirection = Vec3(0,1,0), m_warsBotAim = Vec3(ZERO);
 	float m_warsBotSpeed = 0;

@@ -39,7 +39,7 @@ void BotMovement::Aim(CActor& actor, const Vec3& target)
 	}
 }
 
-bool BotMovement::SafeStep(CActor& actor, const Vec3& direction) const
+bool BotMovement::SafeStep(CActor& actor, const Vec3& direction, float probe) const
 {
 	if (!gEnv->pPhysicalWorld || !actor.GetEntity()->GetPhysics())
 		return false;
@@ -51,23 +51,23 @@ bool BotMovement::SafeStep(CActor& actor, const Vec3& direction) const
 	// Three parallel body-width rays prevent a shoulder clipping a corner.
 	for (float side : {-0.3f,0.0f,0.3f})
 	for (float height : {0.4f,1.1f,1.6f})
-		if (gEnv->pPhysicalWorld->RayWorldIntersection(feet + Vec3(-direction.y*side,direction.x*side,height), direction * 1.5f,
+		if (gEnv->pPhysicalWorld->RayWorldIntersection(feet + Vec3(-direction.y*side,direction.x*side,height), direction * probe,
 			ent_all, flags, &hit, 1, actor.GetEntity()->GetPhysics(), heldPhysics))
 			return false;
 	// Stop at ledges; this is deliberately not a pathfinder or a jump controller.
-	return gEnv->pPhysicalWorld->RayWorldIntersection(feet + direction * 1.2f + Vec3(0,0,0.6f),
+	return gEnv->pPhysicalWorld->RayWorldIntersection(feet + direction * (probe-0.3f) + Vec3(0,0,0.6f),
 		Vec3(0,0,-1.4f), ent_terrain | ent_static | ent_rigid | ent_sleeping_rigid,
 		flags, &hit, 1, actor.GetEntity()->GetPhysics()) != 0;
 }
 
-bool BotMovement::Move(CActor& actor, const Vec3& destination, const Vec3& lookAt, float dt)
+bool BotMovement::Move(CActor& actor, const Vec3& destination, const Vec3& lookAt, float dt, float speed, EStance stance, float probe, bool jumpTraverse)
 {
 	auto* controller = actor.GetMovementController();
 	if (!controller) return false;
 	const Vec3 feet = actor.GetEntity()->GetWorldPos();
 	Vec3 direction = destination - feet;
 	direction.z = 0;
-	if (direction.GetLengthSquared() < 0.8f * 0.8f || fabs_tpl(destination.z - feet.z) > 3.0f)
+	if (direction.GetLengthSquared() < 0.8f * 0.8f || (!jumpTraverse && fabs_tpl(destination.z - feet.z) > 3.0f))
 	{
 		Stop(actor);
 		Aim(actor, lookAt);
@@ -86,22 +86,22 @@ bool BotMovement::Move(CActor& actor, const Vec3& destination, const Vec3& lookA
 		m_sampleTime = 0;
 	}
 	m_avoidTime = max(0.0f, m_avoidTime - dt);
-	bool safe = m_avoidTime <= 0 && SafeStep(actor, direction);
+	bool safe = jumpTraverse || (m_avoidTime <= 0 && SafeStep(actor, direction, probe));
 	if (!safe)
 	{
 		for (float angle : {m_side * 0.8f, -m_side * 0.8f, m_side * 1.57f, -m_side * 1.57f})
 		{
 			Vec3 candidate = Quat::CreateRotationZ(angle) * direction;
-			if (SafeStep(actor, candidate)) { direction = candidate; safe = true; break; }
+			if (SafeStep(actor, candidate, probe)) { direction = candidate; safe = true; break; }
 		}
 	}
 	if (!safe) { Stop(actor); Aim(actor, lookAt); return false; }
-	static_cast<CPlayer&>(actor).SetWarsBotMotion(direction,2.5f,lookAt);
+	static_cast<CPlayer&>(actor).SetWarsBotMotion(direction,speed,lookAt);
 	CMovementRequest request;
 	request.SetMoveTarget(feet + direction * 2.0f);
-	request.SetDesiredSpeed(2.5f);
-	request.SetPseudoSpeed(0.5f);
-	request.SetStance(STANCE_STAND);
+	request.SetDesiredSpeed(speed);
+	request.SetPseudoSpeed(speed<2.0f?0.3f:0.5f);
+	request.SetStance(stance);
 	request.SetLookTarget(lookAt);
 	request.SetAimTarget(lookAt);
 	request.SetFireTarget(lookAt);

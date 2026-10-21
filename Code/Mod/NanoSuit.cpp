@@ -435,6 +435,10 @@ void CNanoSuit::Update(float frameTime)
 	bool isServer=gEnv->bServer;
 
 	bool isAI = !m_pOwner->IsPlayer();
+#if defined(WARSBOTS_EXPERIMENTAL_SPAWNER)
+	// The channel-less virtual player uses native multiplayer recharge/medical rules.
+	if (m_pOwner->IsWarsBotActor()) isAI=false;
+#endif
 
 	//update health
 	int32 currentHealth = m_pOwner->GetHealth();

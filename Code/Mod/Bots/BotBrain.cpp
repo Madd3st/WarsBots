@@ -5,7 +5,10 @@
 #include "Game.h"
 #include "GameRules.h"
 #include "Actor.h"
+#include "Player.h"
 #include <IWeapon.h>
+#include <cmath>
+#include <cstdlib>
 
 namespace WarsBots
 {
@@ -38,7 +41,9 @@ void BotBrain::Change(State state)
 
 void BotBrain::ResetLife()
 {
-	m_movement.Reset();
+	m_locomotion.Reset();
+	m_suit.Reset(); m_blackboard=BotBlackboard(); m_intent=BotIntent();
+	m_testJump=BotJump::None; m_testGait=m_testMode=-1; m_testUntil=m_testModeUntil=m_testJumpAt=0;
 	m_combat.Reset();
 	m_weaponTarget = 0;
 	m_patrolUntil = 0;
@@ -88,9 +93,14 @@ void BotBrain::Stop(BotSpawner& spawner)
 	m_combat.Reset();
 	if (CActor* actor = spawner.GetActor())
 	{
-		m_movement.Stop(*actor);
+		m_blackboard.Sample(static_cast<CPlayer&>(*actor),m_now);
+		if (m_blackboard.canMove && m_blackboard.suitActive)
+			m_suit.Apply(static_cast<CPlayer&>(*actor),NANOMODE_DEFENSE,m_blackboard,m_now);
+		m_locomotion.Stop(static_cast<CPlayer&>(*actor));
+		m_testJump=BotJump::None; m_testGait=m_testMode=-1; m_testUntil=m_testModeUntil=m_testJumpAt=0;
 		actor->GetGameObject()->EnablePrePhysicsUpdate(ePPU_WhenAIActivated);
 	}
+	m_intent=BotIntent(); m_blackboard.nextJump=m_blackboard.nextSuitChange=0; m_suit.Reset();
 	CryLogAlways("[WarsBots] AI stopped; automatic respawn cancelled.");
 }
 
@@ -106,7 +116,9 @@ void BotBrain::Update(BotSpawner& spawner, float dt)
 	if (!spawner.CanRunLocalIA() || !spawner.GetActor()) { Stop(spawner); return; }
 	dt = clamp_tpl(dt, 0.0f, 0.25f);
 	m_now += dt;
-	CActor& actor = *spawner.GetActor();
+	CPlayer& actor = static_cast<CPlayer&>(*spawner.GetActor());
+	m_blackboard.Sample(actor,m_now);
+	m_locomotion.Observe(actor,m_blackboard,m_now);
 	if (m_verbose && m_now >= m_nextTelemetry)
 	{
 		const Vec3 position = actor.GetEntity()->GetWorldPos();
@@ -121,13 +133,25 @@ void BotBrain::Update(BotSpawner& spawner, float dt)
 		pe_status_dynamics dynamics;
 		const bool physical = actor.GetEntity()->GetPhysics() && actor.GetEntity()->GetPhysics()->GetStatus(&dynamics);
 		CryLogAlways("[WarsBots] Motion heading=(%.2f,%.2f) physicalSpeed=%.2f.",heading.x,heading.y,physical?dynamics.v.GetLength2D():-1.0f);
+		int clients=0;
+		IActorIteratorPtr connected=g_pGame->GetIGameFramework()->GetIActorSystem()->CreateActorIterator();
+		while (IActor* client=connected->Next())
+			if (client->GetChannelId() && g_pGame->GetIGameFramework()->GetNetChannel(client->GetChannelId())) ++clients;
+		CryLogAlways("[WarsBots] ABILITY PHYSICS: speed=%.2f vz=%.2f grounded=%d sprint=%d mode=%d energy=%.1f active=%d clients=%d.",
+			m_blackboard.velocity.GetLength2D(),m_blackboard.velocity.z,m_blackboard.grounded?1:0,
+			static_cast<const SPlayerStats*>(actor.GetActorStats())->bSprinting?1:0,int(m_blackboard.mode),m_blackboard.energy,m_blackboard.suitActive?1:0,clients);
 		m_nextTelemetry = m_now + 2.0f;
 	}
 	if (actor.GetHealth() <= 0)
 	{
 		m_combat.StopFire();
-		m_movement.Stop(actor);
-		if (m_state != State::DEAD) { Change(State::DEAD); m_deadTime = 0; }
+		m_locomotion.Stop(actor);
+		m_testJump=BotJump::None; m_testGait=m_testMode=-1; m_testUntil=m_testModeUntil=m_testJumpAt=0;
+		if (m_state != State::DEAD)
+		{
+			Change(State::DEAD); m_deadTime=0; m_intent=BotIntent();
+			m_blackboard.nextJump=m_blackboard.nextSuitChange=0; m_suit.Reset();
+		}
 		m_deadTime += dt;
 		if (m_deadTime >= 5.0f)
 		{
@@ -148,6 +172,18 @@ void BotBrain::Update(BotSpawner& spawner, float dt)
 	m_tick = 0;
 	if (m_state == State::DEAD || m_state == State::RESPAWNING) { ResetLife(); Change(State::SEEKING_WEAPON); }
 
+	m_intent=BotIntent();
+	m_intent.aim=actor.GetEntity()->GetWorldPos()+actor.GetBaseQuat().GetColumn1()*10.0f+Vec3(0,0,1.4f);
+	if (m_now<m_testUntil)
+	{
+		if (m_testGait>=0) { m_intent.MoveTo(m_testGoal,m_testGoal+Vec3(0,0,1.4f)); m_intent.gait=static_cast<BotGait>(m_testGait); }
+		m_intent.jump=m_now>=m_testJumpAt?m_testJump:BotJump::None;
+		if (m_testJump!=BotJump::None) m_intent.suitMode=m_testJump==BotJump::Strength?NANOMODE_STRENGTH:NANOMODE_DEFENSE;
+		else if (m_testGait==int(BotGait::Sprint)) m_intent.suitMode=NANOMODE_SPEED;
+		if (m_now>=m_testJumpAt) m_testJump=BotJump::None; // Consume the command once, including a refused attempt.
+		ExecuteIntent(actor,decisionTime); return;
+	}
+	m_testGait=-1;
 	if (!BotWeapons::SelectAvailable(actor))
 	{
 		m_combat.StopFire();
@@ -163,19 +199,20 @@ void BotBrain::Update(BotSpawner& spawner, float dt)
 			Change(State::MOVING_TO_WEAPON);
 			if ((item->GetWorldPos() - actor.GetEntity()->GetWorldPos()).GetLengthSquared() <= 6.25f)
 			{
-				m_movement.Stop(actor);
+				m_intent.move=false;
 				if (BotWeapons::PickUp(actor, m_weaponTarget)) { m_previousWeaponClass = actor.GetCurrentItem()->GetEntity()->GetClass(); m_weaponTarget = 0; Change(State::SEARCHING_ENEMY); }
 				else m_weaponTarget = 0;
 			}
-			else m_movement.Move(actor, item->GetWorldPos(), item->GetWorldPos(), decisionTime);
+			else m_intent.MoveTo(item->GetWorldPos(),item->GetWorldPos()+Vec3(0,0,1.2f));
 		}
 		else if (!m_fallbackGiven && (!item || m_now - m_weaponSearchStarted >= 6.0f))
 		{
-			m_movement.Stop(actor);
+			m_intent.move=false;
 			m_fallbackGiven = true; // At most one test supply per life, never per frame.
 			if (BotWeapons::GiveTestSCAR(actor)) Change(State::SEARCHING_ENEMY);
 		}
-		else { m_weaponTarget = 0; m_movement.Stop(actor); Change(State::SEEKING_WEAPON); }
+		else { m_weaponTarget = 0; m_intent.move=false; Change(State::SEEKING_WEAPON); }
+		ExecuteIntent(actor,decisionTime);
 		return;
 	}
 
@@ -183,6 +220,7 @@ void BotBrain::Update(BotSpawner& spawner, float dt)
 	if (!enemy)
 	{
 		Change(State::SEARCHING_ENEMY);
+		m_blackboard.enemy=0; m_blackboard.visible=false; m_blackboard.distance=0;
 		const Vec3 feet = actor.GetEntity()->GetWorldPos();
 		if (m_now >= m_patrolUntil || (m_patrolGoal-feet).GetLengthSquared2D() < 2.0f)
 		{
@@ -191,14 +229,19 @@ void BotBrain::Update(BotSpawner& spawner, float dt)
 			m_patrolGoal = feet + Vec3(cosf(angle),sinf(angle),0) * (6.0f + (m_patrolStep%3)*2.0f);
 			m_patrolUntil = m_now + 7.0f;
 		}
-		if (!m_movement.Move(actor, m_patrolGoal, m_patrolGoal + Vec3(0,0,1.3f), decisionTime))
-			m_patrolUntil = min(m_patrolUntil, m_now + 1.0f);
+		m_intent.MoveTo(m_patrolGoal,m_patrolGoal+Vec3(0,0,1.3f));
+		m_intent.gait=BotGait::Run;
+		ExecuteIntent(actor,decisionTime);
+		if (m_blackboard.blocked) m_patrolUntil=min(m_patrolUntil,m_now+1.0f);
 
 		return;
 	}
 	const bool visible = m_combat.Visible();
 	const Vec3 destination = m_combat.LastPosition();
+	m_blackboard.enemy=m_combat.Target(); m_blackboard.visible=visible;
+	m_blackboard.lastEnemyPosition=destination;
 	const float distance = (destination - actor.GetEntity()->GetWorldPos()).GetLength();
+	m_blackboard.distance=distance;
 	Vec3 aim = m_combat.LastAim();
 	// Small deterministic error; the weapon still supplies its own normal spread.
 	const float error = min(0.25f, distance * 0.006f);
@@ -210,19 +253,107 @@ void BotBrain::Update(BotSpawner& spawner, float dt)
 		{
 			m_retreating = true;
 			Vec3 away = (actor.GetEntity()->GetWorldPos()-destination).GetNormalizedSafe(FORWARD_DIRECTION);
-			m_movement.Move(actor, actor.GetEntity()->GetWorldPos()+away*3.0f, aim, decisionTime);
+			m_intent.MoveTo(actor.GetEntity()->GetWorldPos()+away*3.0f,aim);
+			m_intent.combat=BotCombatIntent::Aim;
 		}
-		else { m_retreating = false; m_movement.Stop(actor); m_movement.Aim(actor, aim); }
+		else { m_retreating = false; m_intent.move=false; m_intent.AimAt(aim); }
 		Change(State::ATTACKING);
-		if (m_now - m_stateTime >= 0.3f) m_combat.Attack(actor, *enemy, m_now, m_verbose);
+		m_intent.combat=m_now-m_stateTime>=0.3f?BotCombatIntent::Fire:BotCombatIntent::Aim;
 	}
 	else
 	{
 		m_combat.StopFire();
 		Change(State::CHASING_ENEMY);
-		bool accepted = m_movement.Move(actor, destination, aim, decisionTime);
-		if (m_verbose && !accepted && m_now - m_stateTime > 2.0f)
-		{ CryLogAlways("[WarsBots] Local chase blocked; no teleport/pathfinding fallback."); m_stateTime = m_now; }
+		m_intent.MoveTo(destination,aim);
+		m_intent.gait=distance>24.0f && m_now-m_stateTime>1.5f && m_blackboard.energy>(m_blackboard.mode==NANOMODE_SPEED?50.0f:100.0f)?BotGait::Sprint:BotGait::Run;
+		if (m_intent.gait==BotGait::Sprint) m_intent.suitMode=NANOMODE_SPEED;
+		if (!visible && distance>12.0f && distance<30.0f && BotSuit::CloakEnabled() && m_blackboard.energy>120.0f)
+		{ m_intent.suitMode=NANOMODE_CLOAK; m_intent.gait=BotGait::Walk; }
+
+	}
+	ExecuteIntent(actor,decisionTime);
+}
+void BotBrain::ExecuteIntent(CPlayer& actor, float dt)
+{
+	if (m_now<m_testModeUntil && m_testMode>=0 && m_intent.combat==BotCombatIntent::None && m_intent.jump==BotJump::None)
+		m_intent.suitMode=static_cast<ENanoMode>(m_testMode);
+	m_blackboard.obstacleJump=BotJump::None;
+	if (m_intent.move && m_blackboard.grounded && m_now>=m_blackboard.nextJump && m_now>=m_testUntil)
+	{
+		const Vec3 direction=(m_intent.destination-m_blackboard.position).GetNormalizedSafe(FORWARD_DIRECTION);
+		m_blackboard.obstacleJump=m_locomotion.Obstacle(actor,direction);
+		if (m_blackboard.obstacleJump!=BotJump::None && m_intent.combat==BotCombatIntent::None)
+		{
+			m_intent.jump=m_blackboard.obstacleJump;
+			m_intent.suitMode=m_intent.jump==BotJump::Strength?NANOMODE_STRENGTH:NANOMODE_DEFENSE;
 	}
 }
+	if (!m_blackboard.grounded && static_cast<const SPlayerStats*>(actor.GetActorStats())->jumped && m_blackboard.mode==NANOMODE_STRENGTH && m_intent.jump==BotJump::None)
+		m_intent.suitMode=NANOMODE_STRENGTH;
+	if (m_now<m_blackboard.damagedUntil || m_intent.combat!=BotCombatIntent::None || m_blackboard.energy<45.0f)
+	{ m_intent.suitMode=NANOMODE_DEFENSE; if (m_intent.gait==BotGait::Sprint) m_intent.gait=BotGait::Run; }
+	const bool suitReady=m_suit.Apply(actor,m_intent.suitMode,m_blackboard,m_now);
+	if (!suitReady && m_intent.gait==BotGait::Sprint) m_intent.gait=BotGait::Run;
+	m_locomotion.Execute(actor,m_intent,m_blackboard,m_now,dt);
+	if (m_intent.combat==BotCombatIntent::Fire && m_blackboard.mode!=NANOMODE_CLOAK)
+	{
+		IActor* target=g_pGame->GetIGameFramework()->GetIActorSystem()->GetActor(m_combat.Target());
+		if (target) m_combat.Attack(actor,*target,m_now,m_verbose); else m_combat.StopFire();
+}
+	else m_combat.StopFire();
+}
+void BotBrain::AbilityCommand(IConsoleCmdArgs* args)
+{
+	const char* command=args->GetArg(0);
+	const char* value=args->GetArgCount()>=2?args->GetArg(1):"";
+	CPlayer* actor=static_cast<CPlayer*>(g_pGame->GetBotManager().GetSpawner().GetActor());
+	if (!actor) return;
+	if (!strcmp(command,"wb_bot_abilities"))
+	{
+		m_blackboard.Sample(*actor,m_now);
+		CryLogAlways("[WarsBots] ABILITIES health=%d grounded=%d speed=%.2f vz=%.2f mode=%d energy=%.1f active=%d jumpCooldown=%.2f suitCooldown=%.2f.",
+			m_blackboard.health,m_blackboard.grounded?1:0,m_blackboard.velocity.GetLength2D(),m_blackboard.velocity.z,
+			int(m_blackboard.mode),m_blackboard.energy,m_blackboard.suitActive?1:0,
+			max(0.0f,m_blackboard.nextJump-m_now),max(0.0f,m_blackboard.nextSuitChange-m_now));
+		return;
+	}
+	if (actor->GetHealth()<=0) { CryLogAlways("[WarsBots] ACTION REFUSED: dead actor."); return; }
+	if (!strcmp(command,"wb_bot_jump") && args->GetArgCount()<=3 &&
+		(args->GetArgCount()==1 || !strcmp(value,"normal") || !strcmp(value,"strength")))
+	{
+		if (m_testJump!=BotJump::None) { CryLogAlways("[WarsBots] ACTION REFUSED: jump command already queued."); return; }
+		float delay=0;
+		if (args->GetArgCount()==3)
+		{
+			char* end=nullptr; delay=strtof(args->GetArg(2),&end);
+			if (!end || end==args->GetArg(2) || *end || !std::isfinite(delay) || delay<0 || delay>30)
+			{ CryLogAlways("[WarsBots] ACTION REFUSED: jump delay must be 0..30 seconds."); return; }
+		}
+		m_testJump=!strcmp(value,"strength")?BotJump::Strength:BotJump::Normal;
+		m_testJumpAt=m_now+delay; m_testGait=-1; m_testUntil=m_testJumpAt+6.0f;
+		return;
+	}
+	if (!strcmp(command,"wb_bot_gait"))
+	{
+		if (!strcmp(value,"auto")) { m_testUntil=0; m_testGait=-1; return; }
+		if (!strcmp(value,"walk")) m_testGait=int(BotGait::Walk);
+		else if (!strcmp(value,"run")) m_testGait=int(BotGait::Run);
+		else if (!strcmp(value,"sprint")) m_testGait=int(BotGait::Sprint);
+		else { CryLogAlways("[WarsBots] Usage: wb_bot_gait walk|run|sprint|auto."); return; }
+		m_testGoal=actor->GetEntity()->GetWorldPos()+actor->GetBaseQuat().GetColumn1()*25.0f;
+		m_testUntil=m_now+6.0f; return;
+	}
+	if (!strcmp(command,"wb_bot_suit"))
+	{
+		if (!strcmp(value,"auto")) { m_testMode=-1; m_testModeUntil=0; return; }
+		if (!strcmp(value,"defense")) m_testMode=NANOMODE_DEFENSE;
+		else if (!strcmp(value,"speed")) m_testMode=NANOMODE_SPEED;
+		else if (!strcmp(value,"strength")) m_testMode=NANOMODE_STRENGTH;
+		else if (!strcmp(value,"cloak")) m_testMode=NANOMODE_CLOAK;
+		else { CryLogAlways("[WarsBots] Usage: wb_bot_suit defense|speed|strength|cloak|auto."); return; }
+		m_testModeUntil=m_now+8.0f; return;
+	}
+	CryLogAlways("[WarsBots] Usage: wb_bot_jump [normal|strength] [delaySeconds].");
+}
+
 }

@@ -28,6 +28,7 @@ public:
 	void TraceKill(EntityId shooterId, bool killerEventEmitted);
 	bool CanRunLocalIA() const;
 	CActor* GetActor() const;
+	bool IsCreatingActor() const { return m_creatingActor; }
 	bool AIEnabled() const { return m_brain.Running(); }
 	bool IsOwnedProjectileHit(const HitInfo& hit) const;
 
@@ -57,12 +58,19 @@ private:
 	static void BotStopCommand(IConsoleCmdArgs* args);
 	static void BotStatusCommand(IConsoleCmdArgs* args);
 	static void BotVerboseCommand(IConsoleCmdArgs* args);
+	static void BotAbilityCommand(IConsoleCmdArgs* args);
+	static void BotJumpCommand(IConsoleCmdArgs* args);
+	static void BotGaitCommand(IConsoleCmdArgs* args);
+	static void BotSuitCommand(IConsoleCmdArgs* args);
+	static void BotAbilitiesCommand(IConsoleCmdArgs* args);
 	void EndLevel();
 
 	IGameFramework* m_framework = nullptr;
 	EntityId m_entityId = 0;
 	// Identity guard only: never dereference this cached pointer.
 	const IEntity* m_identity = nullptr;
+	bool m_creatingActor = false;
+	int m_cloakExperimental = 0;
 	bool m_levelReady = false;
 	int m_localTestEnabled = 0;
 	Vec3 m_spawnPosition = Vec3(ZERO);

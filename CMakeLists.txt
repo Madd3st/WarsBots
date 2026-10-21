@@ -243,6 +243,9 @@ if(WARSBOTS_EXPERIMENTAL_SPAWNER)
 		Code/Mod/Bots/BotSpawner.cpp
 		Code/Mod/Bots/BotBrain.cpp
 		Code/Mod/Bots/BotMovement.cpp
+		Code/Mod/Bots/BotBlackboard.cpp
+		Code/Mod/Bots/BotLocomotion.cpp
+		Code/Mod/Bots/BotSuit.cpp
 		Code/Mod/Bots/BotWeapons.cpp
 		Code/Mod/Bots/BotCombat.cpp
 	)

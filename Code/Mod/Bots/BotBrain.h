@@ -1,6 +1,9 @@
 #pragma once
-#include "BotMovement.h"
+#include "BotLocomotion.h"
+#include "BotSuit.h"
 #include "BotCombat.h"
+struct IConsoleCmdArgs;
+class CPlayer;
 namespace WarsBots
 {
 class BotSpawner;
@@ -13,11 +16,20 @@ public:
 	void Stop(BotSpawner& spawner);
 	void Update(BotSpawner& spawner, float dt);
 	void Status() const;
+	void AbilityCommand(IConsoleCmdArgs* args);
 	bool Running() const { return m_running; }
 	void SetVerbose(bool enabled) { m_verbose = enabled; }
 private:
 	void Change(State state);
 	void ResetLife();
+	void ExecuteIntent(CPlayer& actor, float dt);
+	BotBlackboard m_blackboard;
+	BotIntent m_intent;
+	BotSuit m_suit;
+	BotJump m_testJump = BotJump::None;
+	int m_testGait = -1, m_testMode = -1;
+	float m_testUntil = 0, m_testModeUntil = 0, m_testJumpAt = 0;
+	Vec3 m_testGoal = Vec3(ZERO);
 	bool m_running = false;
 	bool m_verbose = false;
 	bool m_fallbackGiven = false;
@@ -30,7 +42,7 @@ private:
 	float m_patrolUntil = 0;
 	unsigned m_life = 0, m_patrolStep = 0;
 	IEntityClass* m_previousWeaponClass = nullptr;
-	BotMovement m_movement;
+	BotLocomotion m_locomotion;
 	BotCombat m_combat;
 };
 }
