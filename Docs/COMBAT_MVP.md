@@ -1,5 +1,8 @@
 # Combat AI MVP — 2026-10-21
 
+Это хронологический журнал нескольких итераций: ниже встречаются старые хеши
+и уже снятые ограничения. Актуальная сводка — [STATUS.md](STATUS.md).
+
 Экспериментальная x64 Release DLL собрана и установлена. SHA256:
 `F9F922F14177C50918C8B36FF6F17BC3D73C4265C1FB09BC3535EFFAD7787175`.
 Артефакт: `build/release-bin64-probe/Mods/WarsBots/Bin64/WarsBots.dll`.
