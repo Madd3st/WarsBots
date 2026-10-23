@@ -1,5 +1,13 @@
 # Актуальное состояние WarsBots
 
+С 2026-10-23 основная платформа — **CryMP**. Форк:
+[Madd3st/crymp-client](https://github.com/Madd3st/crymp-client),
+интеграция `warsbots/main` (`caf1a815`), WIP `warsbots/feature/ia-participants`.
+Локально: `local/crymp-client` (отдельный Git checkout, игнорируется этим репозиторием).
+Актуальные результаты переноса находятся в его `Docs/STATUS.md`.
+Этот репозиторий Crysis Wars сохранён как источник кода и истории; сведения ниже
+относятся к старой платформе, не являются результатами CryMP.
+
 Текущая ветка: `codex/warsbots-abilities`. Экспериментальные способности реализованы
 частично и собраны; фаза ещё не завершена. **Начать с [ABILITIES_PROGRESS](ABILITIES_PROGRESS.md)**:
 там выполненные проверки, команды и незавершённые задачи. Ниже сохранён статус
